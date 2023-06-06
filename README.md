@@ -1,4 +1,4 @@
-## Release
+## Release 
 To release, include the word "release" within your commit message.
 
 ## Reason For Forking
