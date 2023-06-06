@@ -1,0 +1,254 @@
+name: "Syncpack: Synchronise monorepo dependency versions"
+description: "Always use the same versions of each dependency"
+
+branding:
+  icon: "cloud-lightning"
+  color: "green"
+
+inputs:
+  bot-email:
+    description: "GitHub Email for the Syncpack Bot"
+    required: false
+    default: "github-actions@github.com"
+  bot-username:
+    description: "GitHub Username for the Syncpack Bot"
+    required: false
+    default: "github-actions[bot]"
+  commit-message:
+    description: "Commit Message to use when applying fixes"
+    required: false
+    default: "chore(syncpack): format and sync package.json files"
+  format-mismatches:
+    description: '"fix" | "ignore"'
+    required: false
+    default: "fix"
+  lockfile-mismatches:
+    description: '"fix" | "ignore"'
+    required: false
+    default: "fix"
+  package-manager-version:
+    description: "The Semver version of npm, yarn, or pnpm"
+    required: false
+    default: "latest"
+  package-manager:
+    description: "Possible values npm | yarn | pnpm"
+    required: false
+    default: "npm"
+  semver-range-mismatches:
+    description: '"lint" | "fix" | "ignore"'
+    required: false
+    default: "fix"
+  syncpack-version:
+    description: "The Semver version of syncpack"
+    required: false
+    default: "7.2.1"
+  version-mismatches:
+    description: '"lint" | "fix" | "ignore"'
+    required: false
+    default: "fix"
+  remote-name:
+    description: "Name of remote"
+    required: false
+    default: "origin"
+  base-branch:
+    description: "Name of the default branch"
+    required: false
+    default: "main"
+  pr-branch:
+    description: "Name of the branch for the pull request"
+    required: true
+  pr-title:
+    description: "Title of the pull request"
+    required: false
+    default: "chore(syncpack): format package.json and sync depedencies"
+  pr-label:
+    description: "Labels for the pull request, comma separated"
+    required: false
+    default: "sync-deps"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Init
+      id: init
+      shell: bash
+      run: |
+        if [ "${{ inputs.version-mismatches }}" = "fix" ] || [ "${{ inputs.format-mismatches }}" = "fix" ] || [ "${{ inputs.semver-range-mismatches }}" = "fix" ]; then
+          echo "anyFixEnabled=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Install Syncpack
+      id: install-syncpack
+      shell: bash
+      run: |
+        npm i -g "syncpack@${{ inputs.syncpack-version }}"
+
+    - if: ${{ inputs.pr-branch != '' }}
+      name: Create Branch For PR
+      id: create-pr-branch
+      shell: bash
+      run: |
+        git fetch >/dev/null 2>&1
+
+        # Check if branch exists in the remote repository
+        branch_exists=$(git ls-remote --heads origin ${{ inputs.pr-branch }})
+        if [[ -n "$branch_exists" ]]; then
+            git push ${{ inputs.remote-name }} --delete ${{ inputs.pr-branch }}
+        fi
+
+        # Branch doesn't exist, create and checkout to it
+        git checkout ${{ inputs.base-branch }}
+        git pull ${{ inputs.remote-name }} ${{ inputs.base-branch }}
+        git checkout -b ${{ inputs.pr-branch }}
+
+    # Version Mismatches
+    # https://github.com/JamieMason/syncpack#list-mismatches
+    # https://github.com/JamieMason/syncpack#fix-mismatches
+
+    - if: ${{ inputs.version-mismatches == 'fix' }}
+      name: syncpack fix-mismatches
+      id: version-mismatches-fix
+      shell: bash
+      run: |
+        set +e
+        value="$(syncpack fix-mismatches)"
+        value="${value//'%'/'%25'}"
+        value="${value//$'\n'/'%0A'}"
+        value="${value//$'\r'/'%0D'}"
+        echo "stdout=$value" >> $GITHUB_OUTPUT
+        set -e
+        if [[ `git diff --name-only` ]]; then
+          git add .
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    # Format Mismatches
+    # https://github.com/JamieMason/syncpack#format
+
+    - if: ${{ inputs.format-mismatches == 'fix' }}
+      name: syncpack format
+      id: format-mismatches-fix
+      shell: bash
+      run: |
+        set +e
+        value="$(syncpack format)"
+        value="${value//'%'/'%25'}"
+        value="${value//$'\n'/'%0A'}"
+        value="${value//$'\r'/'%0D'}"
+        echo "stdout=$value" >> $GITHUB_OUTPUT
+        set -e
+        if [[ `git diff --name-only` ]]; then
+          git add .
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    # Semver Range Mismatches
+    # https://github.com/JamieMason/syncpack#lint-semver-ranges
+    # https://github.com/JamieMason/syncpack#set-semver-ranges
+
+    - if: ${{ inputs.semver-range-mismatches == 'fix' }}
+      name: syncpack set-semver-ranges
+      id: semver-range-mismatches-fix
+      shell: bash
+      run: |
+        set +e
+        value="$(syncpack set-semver-ranges)"
+        value="${value//'%'/'%25'}"
+        value="${value//$'\n'/'%0A'}"
+        value="${value//$'\r'/'%0D'}"
+        echo "stdout=$value" >> $GITHUB_OUTPUT
+        set -e
+        if [[ `git diff --name-only` ]]; then
+          git add .
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    - if: ${{ inputs.lockfile-mismatches != 'ignore' }}
+      name: Update Lockfile
+      id: lockfile-mismatches-fix
+      shell: bash
+      run: |
+        if [ "${{ inputs.package-manager }}" = "yarn" ]; then
+          npm i -g "yarn@${{ inputs.package-manager-version }}"
+          yarn install
+        elif [ "${{ inputs.package-manager }}" = "pnpm" ]; then
+          npm i -g "pnpm@${{ inputs.package-manager-version }}"
+          pnpm install --no-frozen-lockfile
+        else
+          npm i -g "npm@${{ inputs.package-manager-version }}"
+          npm install
+        fi
+
+    - if: ${{ steps.init.outputs.anyFixEnabled == 'true' }}
+      name: Detect Changes
+      id: detect-changes
+      shell: bash
+      run: |
+        if [ "${{ steps.version-mismatches-fix.outputs.has-changes }}" = "true" ] || [ "${{ steps.format-mismatches-fix.outputs.has-changes }}" = "true" ] || [ "${{ steps.semver-range-mismatches-fix.outputs.has-changes }}" = "true" ]; then
+          echo "has-changes=true" >> $GITHUB_OUTPUT
+        fi
+
+    - if: ${{ steps.detect-changes.outputs.has-changes == 'true' }}
+      name: Commit and Push
+      id: commit-and-push
+      shell: bash
+      run: |
+        git add .
+        git config user.name "${{ inputs.bot-username }}"
+        git config user.email "${{ inputs.bot-email }}"
+        git commit -m "${{ inputs.commit-message }}" --no-verify
+        git push --set-upstream ${{ inputs.remote-name }} ${{ inputs.pr-branch }}
+
+    - if: ${{ steps.detect-changes.outputs.has-changes == 'true' }}
+      name: Create or update pull request
+      uses: actions/github-script@v5
+      env:
+        BASE_BRANCH: ${{ inputs.base-branch }}
+        PR_BRANCH: ${{ inputs.pr-branch }}
+        PR_TITLE: ${{ inputs.pr-title }}
+        PR_LABEL: ${{ inputs.pr-label }}
+      with:
+        github-token: ${{ env.GITHUB_TOKEN }}
+        script: |
+          try {
+            const repo = context.repo;
+            const prBranch = process.env.PR_BRANCH;
+            const prTitle = process.env.PR_TITLE;
+            const baseBranch = process.env.BASE_BRANCH;
+            const prLabel = process.env.PR_LABEL;
+
+            const pullResponse = await github.rest.pulls.list({
+              ...repo,
+              state: 'open',
+              head: `${repo.owner}:${prBranch}`
+            }).then(pulls => pulls.data.find(pull => pull.head.ref === prBranch));
+
+            if (pullResponse) {
+              // If the PR already exists, update it
+              await github.rest.pulls.update({
+                ...repo,
+                pull_number: pullResponse.number,
+                title: prTitle,
+                body: 'Automated dependency update',
+              });
+            } else {
+              // If the PR doesn't exist, create a new one
+              const { data: { number: pullNumber } } = await github.rest.pulls.create({
+                ...repo,
+                title: prTitle,
+                body: 'Automated dependency update',
+                head: prBranch,
+                base: baseBranch
+              });
+
+              if (prLabel) {
+                // Add labels
+                await github.rest.issues.addLabels({
+                  ...repo,
+                  issue_number: pullNumber,
+                  labels: [prLabel]
+                });              }
+            }
+          } catch(error) {
+            console.error("An error has occured", error)
+          }
