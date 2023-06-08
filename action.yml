@@ -61,6 +61,10 @@ inputs:
     description: "Title of the pull request"
     required: false
     default: "chore(syncpack): format package.json and sync depedencies"
+  pr-body:
+    description: "Body of the pull request"
+    required: false
+    default: "Automated dependency update"
   pr-label:
     description: "Labels for the pull request, comma separated"
     required: false
@@ -83,24 +87,6 @@ runs:
       run: |
         npm i -g "syncpack@${{ inputs.syncpack-version }}"
 
-    - if: ${{ inputs.pr-branch != '' }}
-      name: Create Branch For PR
-      id: create-pr-branch
-      shell: bash
-      run: |
-        git fetch >/dev/null 2>&1
-
-        # Check if branch exists in the remote repository
-        branch_exists=$(git ls-remote --heads origin ${{ inputs.pr-branch }})
-        if [[ -n "$branch_exists" ]]; then
-            git push ${{ inputs.remote-name }} --delete ${{ inputs.pr-branch }}
-        fi
-
-        # Branch doesn't exist, create and checkout to it
-        git checkout ${{ inputs.base-branch }}
-        git pull ${{ inputs.remote-name }} ${{ inputs.base-branch }}
-        git checkout -b ${{ inputs.pr-branch }}
-
     # Version Mismatches
     # https://github.com/JamieMason/syncpack#list-mismatches
     # https://github.com/JamieMason/syncpack#fix-mismatches
@@ -118,7 +104,6 @@ runs:
         echo "stdout=$value" >> $GITHUB_OUTPUT
         set -e
         if [[ `git diff --name-only` ]]; then
-          git add .
           echo "has-changes=true" >> $GITHUB_OUTPUT
         fi
 
@@ -138,7 +123,6 @@ runs:
         echo "stdout=$value" >> $GITHUB_OUTPUT
         set -e
         if [[ `git diff --name-only` ]]; then
-          git add .
           echo "has-changes=true" >> $GITHUB_OUTPUT
         fi
 
@@ -159,7 +143,6 @@ runs:
         echo "stdout=$value" >> $GITHUB_OUTPUT
         set -e
         if [[ `git diff --name-only` ]]; then
-          git add .
           echo "has-changes=true" >> $GITHUB_OUTPUT
         fi
 
@@ -189,6 +172,24 @@ runs:
         fi
 
     - if: ${{ steps.detect-changes.outputs.has-changes == 'true' }}
+      name: Create Branch For PR
+      id: create-pr-branch
+      shell: bash
+      run: |
+        git fetch >/dev/null 2>&1
+
+        # Check if branch exists in the remote repository
+        branch_exists=$(git ls-remote --heads origin ${{ inputs.pr-branch }})
+        if [[ -n "$branch_exists" ]]; then
+            git push ${{ inputs.remote-name }} --delete ${{ inputs.pr-branch }}
+        fi
+
+        # Branch doesn't exist, create and checkout to it
+        git checkout ${{ inputs.base-branch }}
+        git pull ${{ inputs.remote-name }} ${{ inputs.base-branch }}
+        git checkout -b ${{ inputs.pr-branch }}
+
+    - if: ${{ steps.detect-changes.outputs.has-changes == 'true' }}
       name: Commit and Push
       id: commit-and-push
       shell: bash
@@ -206,15 +207,17 @@ runs:
         BASE_BRANCH: ${{ inputs.base-branch }}
         PR_BRANCH: ${{ inputs.pr-branch }}
         PR_TITLE: ${{ inputs.pr-title }}
+        PR_BODY: ${{ inputs.pr-body }}
         PR_LABEL: ${{ inputs.pr-label }}
       with:
         github-token: ${{ env.GITHUB_TOKEN }}
         script: |
           try {
             const repo = context.repo;
+            const baseBranch = process.env.BASE_BRANCH;
             const prBranch = process.env.PR_BRANCH;
             const prTitle = process.env.PR_TITLE;
-            const baseBranch = process.env.BASE_BRANCH;
+            const prBody = process.env.PR_BODY;
             const prLabel = process.env.PR_LABEL;
 
             const pullResponse = await github.rest.pulls.list({
@@ -229,14 +232,14 @@ runs:
                 ...repo,
                 pull_number: pullResponse.number,
                 title: prTitle,
-                body: 'Automated dependency update',
+                body: prBody,
               });
             } else {
               // If the PR doesn't exist, create a new one
               const { data: { number: pullNumber } } = await github.rest.pulls.create({
                 ...repo,
                 title: prTitle,
-                body: 'Automated dependency update',
+                body: prBody,
                 head: prBranch,
                 base: baseBranch
               });
@@ -247,7 +250,8 @@ runs:
                   ...repo,
                   issue_number: pullNumber,
                   labels: [prLabel]
-                });              }
+                });              
+              }
             }
           } catch(error) {
             console.error("An error has occured", error)
